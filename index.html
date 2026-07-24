@@ -59,7 +59,7 @@
 
             try {
                 // ⚠️ REPLACE THIS URL WITH YOUR ACTUAL N8N PRODUCTION WEBHOOK URL
-                const response = await fetch('https://n8n.ougnv.site/webhook/b3ca1a31-acd3-41d4-92c8-990e0f67aa17/webhook', {
+                const response = await fetch('https://n8n.ougnv.site/webhook/legal-audit', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ contract_text: text })
