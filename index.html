@@ -72,11 +72,18 @@
 
         // 统一提取文件处理逻辑
         function processFile(file) {
-            if (file) {
-                selectedFile = file;
-                document.getElementById('fileNameDisplay').innerText = `Selected File: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
-            }
-        }
+    if (!file) return;
+
+    // 前端防爆限制：禁止上传超过 15MB 的文件
+    const MAX_MB = 15;
+    if (file.size > MAX_MB * 1024 * 1024) {
+        alert(`File is too large (${(file.size / (1024*1024)).toFixed(1)}MB). Please upload a document smaller than ${MAX_MB}MB or paste the contract text directly.`);
+        return;
+    }
+
+    selectedFile = file;
+    document.getElementById('fileNameDisplay').innerText = `Selected File: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+}
 
         // 处理点击选择文件
         function handleFileSelect(e) {
