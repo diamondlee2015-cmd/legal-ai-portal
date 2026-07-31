@@ -180,7 +180,18 @@
                 document.getElementById('resultContainer').classList.remove('hidden');
 
                 // 2. 🎯 根据文档类型动态更新左侧卡片标题
-                const isJudgment = data.document_type === 'JUDGMENT';
+                // 1. 统一转为大写判断
+const docType = String(data.document_type || data.doc_type || '').toUpperCase();
+
+// 2. 防御机制：如果后端没传 document_type，根据文本关键字自动保底识别
+const isJudgment = docType === 'JUDGMENT' || 
+                   docType === 'RULING' || 
+                   (data.risk_summary && (
+                       data.risk_summary.includes('裁决') || 
+                       data.risk_summary.includes('诉讼') || 
+                       data.risk_summary.includes('Claimants') || 
+                       data.risk_summary.includes('Dismissed')
+                   ));
                 document.getElementById('excerptTitle').innerText = isJudgment 
                     ? '📄 JUDGMENT KEY EXCERPT' 
                     : '📄 AUDITED CLAUSE (EXCERPT)';
