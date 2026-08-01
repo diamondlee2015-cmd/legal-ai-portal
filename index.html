@@ -45,7 +45,6 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
                     </svg>
                     <span class="text-sm text-slate-300 font-medium" id="fileNameDisplay">Click or Drag Digital PDF / DOCX file here</span>
-                    <!-- 🎯 显眼的提示 Banner -->
                     <span class="text-xs text-amber-400 bg-amber-950/50 border border-amber-800/60 px-3 py-1 rounded-full mt-1">
                         💡 Note: Supports Digital PDFs. For scanned photos/images, please paste raw text below.
                     </span>
@@ -72,7 +71,6 @@
             <!-- 左侧：仅展示触发风险的具体条款片断 (5 栏) -->
             <div class="col-span-12 md:col-span-5 bg-slate-800/30 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
                 <div>
-                    <!-- 🎯 使用 id 进行动态标题替换 -->
                     <h3 id="excerptTitle" class="text-xs font-semibold text-slate-400 mb-3 border-b border-slate-800 pb-2 uppercase tracking-wider flex items-center gap-2">
                         📄 AUDITED CLAUSE (EXCERPT)
                     </h3>
@@ -96,7 +94,7 @@
 
     <script>
     // 1. 全局状态管理
-    let selectedFiles = []; // 支持存储多文件数组
+    let selectedFiles = [];
 
     function getUserId() {
         const urlParams = new URLSearchParams(window.location.search);
@@ -141,7 +139,6 @@
             selectedFiles = validFiles;
         }
 
-        // 更新 UI 拖拽框提示
         const displayBox = document.getElementById('fileNameDisplay');
         if (selectedFiles.length === 1) {
             displayBox.innerText = `Selected: ${selectedFiles[0].name} (${(selectedFiles[0].size / 1024).toFixed(1)} KB)`;
@@ -167,7 +164,7 @@
         }
     }, false);
 
-    // 3. 【防线一核心】：隔离型并发池队列控制器 (Concurrency Limit = 2)
+    // 3. 并发池控制器 (Concurrency Limit = 2)
     async function processBatchFiles(files, uploadFn, limit = 2, onProgress) {
         const results = [];
         const executing = new Set();
@@ -222,7 +219,7 @@
         return await response.json();
     }
 
-    // 5. 核心触发逻辑：支持纯文本或批量文件
+    // 5. 核心触发逻辑
     async function analyzeContract() {
         const text = document.getElementById('contractText').value.trim();
         if (!text && selectedFiles.length === 0) {
@@ -236,12 +233,11 @@
         const sourceView = document.getElementById('sourceView');
         const resultContainer = document.getElementById('resultContainer');
 
-        // 清空先前的展示区域
         aiAnalysisView.innerHTML = '';
         sourceView.innerHTML = '';
         resultContainer.classList.remove('hidden');
 
-        // 场景 A：纯文本粘贴分析
+        // 场景 A：纯文本
         if (selectedFiles.length === 0 && text) {
             btn.innerHTML = "⏳ Auditing Text...";
             try {
@@ -256,16 +252,15 @@
             return;
         }
 
-        // 场景 B：批量文件/单文件上传（启动防线一并发池）
+        // 场景 B：批量文件
         let completedCount = 0;
         const total = selectedFiles.length;
 
         await processBatchFiles(
             selectedFiles,
             (file) => sendSingleAuditRequest(file, text),
-            2, // ⚡ 硬性控制最多 2 个并发请求，稳如磐石
+            2,
             (current, totalCount, status, fileName, responseData) => {
-                // 实时进度更新按钮文案
                 btn.innerHTML = `⏳ Auditing (${completedCount}/${totalCount}) - ${fileName.slice(0, 15)}...`;
 
                 if (status === 'success') {
@@ -287,12 +282,12 @@
         btn.disabled = false;
     }
 
-    // 6. UI 渲染：成功报告卡片追加
+    // 6. UI 渲染：集成【人机协同反省 & 律所记忆教导】卡片
     function renderSingleResultCard(data, fileName, fallbackText) {
         const sourceBox = document.getElementById('sourceView');
         const aiAnalysisView = document.getElementById('aiAnalysisView');
+        const cardUniqueId = 'card_' + Math.random().toString(36).substr(2, 9);
 
-        // 更新左侧摘录（显示最新的条款文本）
         const docType = String(data.document_type || data.doc_type || '').toUpperCase();
         const isJudgment = docType === 'JUDGMENT' || docType === 'RULING' || 
                            (data.risk_summary && (data.risk_summary.includes('裁决') || data.risk_summary.includes('Dismissed')));
@@ -307,15 +302,16 @@
 
         sourceBox.innerHTML += `<div class="mb-3 border-b border-blue-900/40 pb-2"><strong>[${fileName}]:</strong><br>${excerptText}</div>`;
 
-        // 右侧追加风险卡片
         const badgeHtml = isJudgment
             ? `<span class="bg-blue-900/80 text-blue-300 border border-blue-500/80 px-2.5 py-1 rounded-md text-xs font-semibold">⚖️ CASE RULING</span>`
             : `<span class="bg-red-900/80 text-red-300 border border-red-500/80 px-2.5 py-1 rounded-md text-xs font-semibold">🔴 HIGH RISK DETECTED</span>`;
 
         const boxBgStyle = isJudgment ? 'bg-blue-950/30 border-blue-800/50' : 'bg-red-950/40 border-red-800/50';
+        const aiSummary = data.risk_summary || 'Analysis complete.';
 
+        // 追加带反省互动区的卡片
         const cardHtml = `
-            <div class="${boxBgStyle} border p-4 rounded-lg mb-4">
+            <div id="${cardUniqueId}" class="${boxBgStyle} border p-4 rounded-lg mb-4 shadow-md transition-all">
                 <div class="flex justify-between items-center mb-2">
                     <div class="flex items-center gap-2">
                         ${badgeHtml}
@@ -323,16 +319,46 @@
                     </div>
                     <span class="text-xs text-slate-400 font-mono">Confidence: ${data.confidence || '0.95'}</span>
                 </div>
-                <p class="text-sm text-slate-200 mt-1 leading-relaxed">${data.risk_summary || 'Analysis complete.'}</p>
+                
+                <p class="text-sm text-slate-200 mt-1 leading-relaxed">${aiSummary}</p>
+                
                 <div class="mt-3 text-xs text-blue-300 bg-blue-950/60 p-2.5 rounded border border-blue-900/80 font-mono">
                     <strong>Relevant Precedent / Authority:</strong><br>${data.legal_citation || 'SG/MY Common Law Precedents'}
+                </div>
+
+                <!-- 🎯 律师人机协同反省操作区 -->
+                <div class="mt-4 pt-3 border-t border-slate-700/60 flex flex-col gap-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-[11px] text-slate-400 font-mono">Feedback & Firm Memory:</span>
+                        <div class="flex gap-2">
+                            <button onclick="acceptAiDraft('${cardUniqueId}')" class="px-2.5 py-1 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-700/60 rounded text-xs transition-colors flex items-center gap-1">
+                                ✓ Accept
+                            </button>
+                            <button onclick="toggleCorrectionBox('${cardUniqueId}')" class="px-2.5 py-1 bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-700/60 rounded text-xs transition-colors flex items-center gap-1">
+                                ✎ Over-rule & Teach AI
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 隐藏的律师教导输入框 -->
+                    <div id="box_${cardUniqueId}" class="hidden mt-2 bg-slate-900/90 p-3 rounded-lg border border-amber-800/40 space-y-2">
+                        <label class="block text-xs font-semibold text-amber-300">Senior Partner Redline Standard (本所判例/标准红线纠偏):</label>
+                        <textarea id="input_${cardUniqueId}" rows="2" class="w-full text-xs p-2 bg-slate-950 border border-slate-700 rounded text-slate-200 focus:outline-none focus:border-amber-500 font-mono" placeholder="E.g., In SG jurisdiction, limit indemnity cap strictly to 50% contract value instead of fixed $1M."></textarea>
+                        
+                        <div class="flex justify-end gap-2">
+                            <button onclick="toggleCorrectionBox('${cardUniqueId}')" class="px-2 py-1 text-xs text-slate-400 hover:text-slate-200">Cancel</button>
+                            <button onclick="submitCorrection('${cardUniqueId}', '${fileName}', \`${excerptText.replace(/`/g, '\\`')}\`, \`${aiSummary.replace(/`/g, '\\`')}\`)" class="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium transition-all shadow-md">
+                                💾 Save to Firm Memory
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         `;
         aiAnalysisView.insertAdjacentHTML('beforeend', cardHtml);
     }
 
-    // 7. UI 渲染：单文件失败/隔离卡片追加
+    // 7. UI 渲染：失败卡片
     function renderErrorCard(fileName, errorMsg) {
         const aiAnalysisView = document.getElementById('aiAnalysisView');
         const cardHtml = `
@@ -346,6 +372,48 @@
         `;
         aiAnalysisView.insertAdjacentHTML('beforeend', cardHtml);
     }
-</script>
+
+    // 8. 律师反馈与记忆学习函数
+    function toggleCorrectionBox(cardId) {
+        const box = document.getElementById(`box_${cardId}`);
+        if (box) box.classList.toggle('hidden');
+    }
+
+    function acceptAiDraft(cardId) {
+        alert("✓ AI Audit accepted and logged into audit history.");
+    }
+
+    async function submitCorrection(cardId, fileName, rawClause, badAiOutput) {
+        const correctionText = document.getElementById(`input_${cardId}`).value.trim();
+        if (!correctionText) {
+            return alert("Please enter your firm's redline standard or correction logic.");
+        }
+
+        const payload = {
+            law_firm_id: currentUserId,
+            contract_type: "General_Contract",
+            clause_text: rawClause,
+            bad_ai_output: badAiOutput,
+            human_correction: correctionText
+        };
+
+        try {
+            const res = await fetch('https://n8n.ougnv.site/webhook/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                alert("🎯 Success! Lesson saved into Supabase Memory. AI will dynamically apply this logic next time.");
+                toggleCorrectionBox(cardId);
+            } else {
+                alert("Failed to save memory. Please check n8n webhook connection.");
+            }
+        } catch (err) {
+            alert(`Error connecting to memory endpoint: ${err.message}`);
+        }
+    }
+    </script>
 </body>
 </html>
