@@ -95,152 +95,257 @@
     </main>
 
     <script>
-        let selectedFile = null;
+    // 1. 全局状态管理
+    let selectedFiles = []; // 支持存储多文件数组
 
-        function getUserId() {
-            const urlParams = new URLSearchParams(window.location.search);
-            let user = urlParams.get('user');
+    function getUserId() {
+        const urlParams = new URLSearchParams(window.location.search);
+        let user = urlParams.get('user');
+        if (!user) {
+            user = localStorage.getItem('nesthing_user_id');
             if (!user) {
-                user = localStorage.getItem('nesthing_user_id');
-                if (!user) {
-                    user = 'User_' + Math.random().toString(36).substr(2, 6);
-                    localStorage.setItem('nesthing_user_id', user);
-                }
+                user = 'User_' + Math.random().toString(36).substr(2, 6);
+                localStorage.setItem('nesthing_user_id', user);
             }
-            return user;
         }
+        return user;
+    }
 
-        const currentUserId = getUserId();
-        document.getElementById('userBadge').innerText = `User: ${currentUserId}`;
+    const currentUserId = getUserId();
+    document.getElementById('userBadge').innerText = `User: ${currentUserId}`;
 
-        function updateCharCount(el) {
-            document.getElementById('charCounter').innerText = `${el.value.length} / 10,000 chars`;
-        }
+    function updateCharCount(el) {
+        document.getElementById('charCounter').innerText = `${el.value.length} / 10,000 chars`;
+    }
 
-        function processFile(file) {
-            if (!file) return;
+    // 2. 文件选择与多文件状态处理
+    function processFiles(files) {
+        if (!files || files.length === 0) return;
 
-            const MAX_MB = 15;
+        const fileArray = Array.from(files);
+        const MAX_MB = 15;
+        const validFiles = [];
+
+        for (const file of fileArray) {
             if (file.size > MAX_MB * 1024 * 1024) {
-                alert(`File is too large (${(file.size / (1024*1024)).toFixed(1)}MB). Please upload a document smaller than ${MAX_MB}MB or paste text manually.`);
-                return;
+                alert(`File "${file.name}" is too large (${(file.size / (1024*1024)).toFixed(1)}MB). Limit is ${MAX_MB}MB.`);
+            } else {
+                validFiles.push(file);
             }
-
-            selectedFile = file;
-            document.getElementById('fileNameDisplay').innerText = `Selected: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
         }
 
-        function handleFileSelect(e) {
-            processFile(e.target.files[0]);
+        if (validFiles.length > 50) {
+            alert("Maximum 50 files allowed per batch. Truncating to first 50 files.");
+            selectedFiles = validFiles.slice(0, 50);
+        } else {
+            selectedFiles = validFiles;
         }
 
-        const dropZone = document.getElementById('dropZone');
-        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            dropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
+        // 更新 UI 拖拽框提示
+        const displayBox = document.getElementById('fileNameDisplay');
+        if (selectedFiles.length === 1) {
+            displayBox.innerText = `Selected: ${selectedFiles[0].name} (${(selectedFiles[0].size / 1024).toFixed(1)} KB)`;
+        } else if (selectedFiles.length > 1) {
+            displayBox.innerText = `📁 Batch Selected: ${selectedFiles.length} files ready for audit`;
+        }
+    }
+
+    function handleFileSelect(e) {
+        processFiles(e.target.files);
+    }
+
+    const dropZone = document.getElementById('dropZone');
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+            document.getElementById('fileInput').files = files;
+            processFiles(files);
+        }
+    }, false);
+
+    // 3. 【防线一核心】：隔离型并发池队列控制器 (Concurrency Limit = 2)
+    async function processBatchFiles(files, uploadFn, limit = 2, onProgress) {
+        const results = [];
+        const executing = new Set();
+
+        for (const [index, file] of files.entries()) {
+            const task = (async () => {
+                try {
+                    if (onProgress) onProgress(index + 1, files.length, 'processing', file.name);
+                    const res = await uploadFn(file);
+                    if (onProgress) onProgress(index + 1, files.length, 'success', file.name, res);
+                    return { status: 'fulfilled', value: res, fileName: file.name };
+                } catch (error) {
+                    if (onProgress) onProgress(index + 1, files.length, 'error', file.name, error);
+                    return { status: 'rejected', reason: error, fileName: file.name };
+                }
+            })();
+
+            results.push(task);
+            executing.add(task);
+
+            const clean = () => executing.delete(task);
+            task.then(clean, clean);
+
+            if (executing.size >= limit) {
+                await Promise.race(executing);
+            }
+        }
+        return Promise.all(results);
+    }
+
+    // 4. 单次 HTTP 请求调用函数
+    async function sendSingleAuditRequest(file = null, text = '') {
+        const formData = new FormData();
+        formData.append('user_id', currentUserId);
+        if (file) formData.append('file', file);
+        if (text) formData.append('contract_text', text);
+
+        const response = await fetch('https://n8n.ougnv.site/webhook/legal-audit', {
+            method: 'POST',
+            body: formData
         });
 
-        dropZone.addEventListener('drop', (e) => {
-            const dt = e.dataTransfer;
-            const files = dt.files;
-            if (files && files.length > 0) {
-                document.getElementById('fileInput').files = files;
-                processFile(files[0]);
-            }
-        }, false);
+        if (response.status === 429) {
+            const errData = await response.json();
+            throw new Error(errData.message || 'Daily limit reached or Rate limited.');
+        }
 
-        async function analyzeContract() {
-            const text = document.getElementById('contractText').value;
-            if (!text && !selectedFile) return alert('Please enter contract text or upload a document.');
+        if (!response.ok) {
+            throw new Error(`Server Error (Status ${response.status})`);
+        }
 
-            const btn = document.getElementById('submitBtn');
-            btn.innerHTML = "⏳ Auditing Legal Risks...";
-            btn.disabled = true;
+        return await response.json();
+    }
 
+    // 5. 核心触发逻辑：支持纯文本或批量文件
+    async function analyzeContract() {
+        const text = document.getElementById('contractText').value.trim();
+        if (!text && selectedFiles.length === 0) {
+            return alert('Please enter contract text or select document(s).');
+        }
+
+        const btn = document.getElementById('submitBtn');
+        btn.disabled = true;
+
+        const aiAnalysisView = document.getElementById('aiAnalysisView');
+        const sourceView = document.getElementById('sourceView');
+        const resultContainer = document.getElementById('resultContainer');
+
+        // 清空先前的展示区域
+        aiAnalysisView.innerHTML = '';
+        sourceView.innerHTML = '';
+        resultContainer.classList.remove('hidden');
+
+        // 场景 A：纯文本粘贴分析
+        if (selectedFiles.length === 0 && text) {
+            btn.innerHTML = "⏳ Auditing Text...";
             try {
-                const formData = new FormData();
-                formData.append('user_id', currentUserId);
-
-                if (selectedFile) formData.append('file', selectedFile);
-                if (text) formData.append('contract_text', text);
-
-                const response = await fetch('https://n8n.ougnv.site/webhook/legal-audit', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (response.status === 429) {
-                    const errData = await response.json();
-                    alert(`⚠️ Limit Exceeded:\n${errData.message || 'Limit reached.'}`);
-                    return;
-                }
-
-                const data = await response.json();
-
-                // 1. 显示结果容器
-                document.getElementById('resultContainer').classList.remove('hidden');
-
-                // 2. 🎯 根据文档类型动态更新左侧卡片标题
-                // 1. 统一转为大写判断
-const docType = String(data.document_type || data.doc_type || '').toUpperCase();
-
-// 2. 防御机制：如果后端没传 document_type，根据文本关键字自动保底识别
-const isJudgment = docType === 'JUDGMENT' || 
-                   docType === 'RULING' || 
-                   (data.risk_summary && (
-                       data.risk_summary.includes('裁决') || 
-                       data.risk_summary.includes('诉讼') || 
-                       data.risk_summary.includes('Claimants') || 
-                       data.risk_summary.includes('Dismissed')
-                   ));
-                document.getElementById('excerptTitle').innerText = isJudgment 
-                    ? '📄 JUDGMENT KEY EXCERPT' 
-                    : '📄 AUDITED CLAUSE (EXCERPT)';
-
-                // 3. 渲染左侧摘录文本
-                const sourceBox = document.getElementById('sourceView');
-                if (data.is_scanned || (data.extracted_text && data.extracted_text.includes('SCANNED DOCUMENT DETECTED'))) {
-                    sourceBox.className = "text-sm leading-relaxed text-amber-200 font-mono bg-amber-950/40 p-4 rounded-lg border border-amber-800/80";
-                    sourceBox.innerText = data.extracted_text || "⚠️ Scanned image detected. Please paste contract text above.";
-                } else {
-                    sourceBox.className = "text-sm leading-relaxed text-blue-200 font-mono bg-blue-950/30 p-4 rounded-lg border border-blue-900/50 italic";
-                    sourceBox.innerText = data.target_clause ? `"${data.target_clause}"` : (data.extracted_text || text);
-                }
-
-                // 4. 🎯 根据文档类型生成右侧标签与卡片样式
-                const badgeHtml = isJudgment
-                    ? `<span class="bg-blue-900/80 text-blue-300 border border-blue-500/80 px-2.5 py-1 rounded-md text-xs font-semibold">⚖️ CASE RULING: CLAIM DISMISSED</span>`
-                    : `<span class="bg-red-900/80 text-red-300 border border-red-500/80 px-2.5 py-1 rounded-md text-xs font-semibold">🔴 HIGH LEGAL RISK DETECTED</span>`;
-
-                const boxBgStyle = isJudgment
-                    ? 'bg-blue-950/30 border-blue-800/50'
-                    : 'bg-red-950/40 border-red-800/50';
-
-                // 5. 渲染右侧 AI 分析
-                document.getElementById('aiAnalysisView').innerHTML = `
-                    <div class="${boxBgStyle} border p-4 rounded-lg">
-                        <div class="flex justify-between items-center mb-2">
-                            ${badgeHtml}
-                            <span class="text-xs text-slate-400 font-mono">Confidence: ${data.confidence || '0.95'}</span>
-                        </div>
-                        <p class="text-sm text-slate-200 mt-1 leading-relaxed">${data.risk_summary || 'Analysis complete.'}</p>
-                        <div class="mt-3 text-xs text-blue-300 bg-blue-950/60 p-2.5 rounded border border-blue-900/80 font-mono">
-                            <strong>Relevant Precedent / Authority:</strong><br>${data.legal_citation || 'SG/MY Common Law Precedents'}
-                        </div>
-                    </div>
-                `;
-
-                if(selectedFile) {
-                    document.getElementById('fileLimitBadge').innerText = "Daily Large File: 1/1 Used";
-                    document.getElementById('fileLimitBadge').className = "text-xs px-2.5 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800";
-                }
-
-            } catch (e) {
-                alert('Connection failed. Please check your network or n8n status.');
+                const data = await sendSingleAuditRequest(null, text);
+                renderSingleResultCard(data, "Pasted Raw Text", text);
+            } catch (err) {
+                alert(`⚠️ Audit Failed: ${err.message}`);
             } finally {
                 btn.innerHTML = "🚀 Run AI Legal Risk Audit";
                 btn.disabled = false;
             }
+            return;
         }
-    </script>
+
+        // 场景 B：批量文件/单文件上传（启动防线一并发池）
+        let completedCount = 0;
+        const total = selectedFiles.length;
+
+        await processBatchFiles(
+            selectedFiles,
+            (file) => sendSingleAuditRequest(file, text),
+            2, // ⚡ 硬性控制最多 2 个并发请求，稳如磐石
+            (current, totalCount, status, fileName, responseData) => {
+                // 实时进度更新按钮文案
+                btn.innerHTML = `⏳ Auditing (${completedCount}/${totalCount}) - ${fileName.slice(0, 15)}...`;
+
+                if (status === 'success') {
+                    completedCount++;
+                    renderSingleResultCard(responseData, fileName, text);
+                } else if (status === 'error') {
+                    completedCount++;
+                    renderErrorCard(fileName, responseData?.message || "Audit failed or file unreadable.");
+                }
+
+                if (completedCount === totalCount) {
+                    document.getElementById('fileLimitBadge').innerText = "Daily Large File: Used";
+                    document.getElementById('fileLimitBadge').className = "text-xs px-2.5 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800";
+                }
+            }
+        );
+
+        btn.innerHTML = "🚀 Run AI Legal Risk Audit";
+        btn.disabled = false;
+    }
+
+    // 6. UI 渲染：成功报告卡片追加
+    function renderSingleResultCard(data, fileName, fallbackText) {
+        const sourceBox = document.getElementById('sourceView');
+        const aiAnalysisView = document.getElementById('aiAnalysisView');
+
+        // 更新左侧摘录（显示最新的条款文本）
+        const docType = String(data.document_type || data.doc_type || '').toUpperCase();
+        const isJudgment = docType === 'JUDGMENT' || docType === 'RULING' || 
+                           (data.risk_summary && (data.risk_summary.includes('裁决') || data.risk_summary.includes('Dismissed')));
+
+        document.getElementById('excerptTitle').innerText = isJudgment 
+            ? '📄 JUDGMENT KEY EXCERPT' 
+            : '📄 AUDITED CLAUSE (EXCERPT)';
+
+        const excerptText = data.is_scanned || (data.extracted_text && data.extracted_text.includes('SCANNED DOCUMENT DETECTED'))
+            ? (data.extracted_text || "⚠️ Scanned image detected. Please paste text directly.")
+            : (data.target_clause ? `"${data.target_clause}"` : (data.extracted_text || fallbackText));
+
+        sourceBox.innerHTML += `<div class="mb-3 border-b border-blue-900/40 pb-2"><strong>[${fileName}]:</strong><br>${excerptText}</div>`;
+
+        // 右侧追加风险卡片
+        const badgeHtml = isJudgment
+            ? `<span class="bg-blue-900/80 text-blue-300 border border-blue-500/80 px-2.5 py-1 rounded-md text-xs font-semibold">⚖️ CASE RULING</span>`
+            : `<span class="bg-red-900/80 text-red-300 border border-red-500/80 px-2.5 py-1 rounded-md text-xs font-semibold">🔴 HIGH RISK DETECTED</span>`;
+
+        const boxBgStyle = isJudgment ? 'bg-blue-950/30 border-blue-800/50' : 'bg-red-950/40 border-red-800/50';
+
+        const cardHtml = `
+            <div class="${boxBgStyle} border p-4 rounded-lg mb-4">
+                <div class="flex justify-between items-center mb-2">
+                    <div class="flex items-center gap-2">
+                        ${badgeHtml}
+                        <span class="text-xs text-slate-300 font-mono font-bold">${fileName}</span>
+                    </div>
+                    <span class="text-xs text-slate-400 font-mono">Confidence: ${data.confidence || '0.95'}</span>
+                </div>
+                <p class="text-sm text-slate-200 mt-1 leading-relaxed">${data.risk_summary || 'Analysis complete.'}</p>
+                <div class="mt-3 text-xs text-blue-300 bg-blue-950/60 p-2.5 rounded border border-blue-900/80 font-mono">
+                    <strong>Relevant Precedent / Authority:</strong><br>${data.legal_citation || 'SG/MY Common Law Precedents'}
+                </div>
+            </div>
+        `;
+        aiAnalysisView.insertAdjacentHTML('beforeend', cardHtml);
+    }
+
+    // 7. UI 渲染：单文件失败/隔离卡片追加
+    function renderErrorCard(fileName, errorMsg) {
+        const aiAnalysisView = document.getElementById('aiAnalysisView');
+        const cardHtml = `
+            <div class="bg-amber-950/30 border border-amber-800/50 p-4 rounded-lg mb-4">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="bg-amber-900/80 text-amber-300 border border-amber-500/80 px-2.5 py-1 rounded-md text-xs font-semibold">⚠️ AUDIT FAILED / SKIPPED</span>
+                    <span class="text-xs text-slate-400 font-mono">${fileName}</span>
+                </div>
+                <p class="text-sm text-amber-200 mt-1 leading-relaxed">${errorMsg}</p>
+            </div>
+        `;
+        aiAnalysisView.insertAdjacentHTML('beforeend', cardHtml);
+    }
+</script>
 </body>
 </html>
