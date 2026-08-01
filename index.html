@@ -38,7 +38,7 @@
                  class="border-2 border-dashed border-slate-700 hover:border-blue-500 rounded-lg p-6 text-center bg-slate-900/60 transition-colors cursor-pointer mb-2"
                  onclick="document.getElementById('fileInput').click()">
                 
-                <input type="file" id="fileInput" accept=".pdf,.docx,.txt" class="hidden" onchange="handleFileSelect(event)">
+                <input type="file" id="fileInput" accept=".pdf,.docx,.txt" multiple class="hidden" onchange="handleFileSelect(event)">
                 
                 <div class="flex flex-col items-center gap-2 pointer-events-none">
                     <svg class="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
